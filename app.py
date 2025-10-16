@@ -2,7 +2,6 @@ import streamlit as st
 import google.generativeai as genai
 from PIL import Image
 import io
-import os
 
 # Page config
 st.set_page_config(
@@ -19,6 +18,13 @@ st.markdown("Upload a model photo and jewelry image to see them combined realist
 with st.sidebar:
     st.header("⚙️ Settings")
     api_key = st.text_input("Google AI API Key", type="password", help="Get your key from ai.google.dev")
+    
+    # Model selection
+    model_choice = st.selectbox(
+        "Select Model",
+        ["gemini-1.5-pro", "gemini-1.5-flash", "gemini-2.0-flash-exp"],
+        index=0
+    )
     
     if api_key:
         st.success("API Key configured ✓")
@@ -72,71 +78,95 @@ if st.button("✨ Generate Virtual Try-On", type="primary", use_container_width=
             try:
                 # Configure Gemini
                 genai.configure(api_key=api_key)
-                model = genai.GenerativeModel('gemini-2.0-flash-exp')
                 
                 # Load images
                 base_img = Image.open(base_photo)
                 jewelry_img = Image.open(jewelry_photo)
                 
-                # Create prompt
-                base_prompt = """Place this jewelry on the model naturally and photorealistically. 
-                The result must look like a real photoshoot where the person is actually wearing the jewelry.
-                
-                Requirements:
-                - Position and scale the jewelry correctly on the appropriate body part (ear, neck, or wrist)
-                - Match the lighting and create natural shadows where jewelry touches skin
-                - Ensure proper depth and perspective - jewelry should follow body contours
-                - Handle occlusion naturally (hair or clothing may partially cover jewelry)
-                - Blend seamlessly with no harsh edges or floating appearance
-                - Preserve the person's identity and features exactly
-                - Make metal reflections adapt to the scene lighting
-                
-                Output a single photorealistic image that looks professional and natural."""
+                # Create prompt - simplified for better results
+                base_prompt = """Create a photorealistic image showing this person wearing this jewelry naturally.
+
+Instructions:
+- Place the jewelry on the appropriate body part (neck for necklace, ear for earring, wrist for bracelet)
+- Match the lighting of the original photo
+- Add natural shadows where the jewelry touches skin
+- Make it look like a real photograph, not edited
+- Keep the person's face and features exactly the same
+- Blend the jewelry seamlessly with proper depth and perspective"""
                 
                 if custom_prompt:
-                    base_prompt += f"\n\nAdditional instructions: {custom_prompt}"
+                    base_prompt += f"\n\nAdditional: {custom_prompt}"
                 
-                # Generate
-                response = model.generate_content([
-                    base_prompt,
-                    base_img,
-                    jewelry_img
-                ])
+                base_prompt += "\n\nGenerate only the final image with the person wearing the jewelry."
+                
+                # Try generation with the selected model
+                model = genai.GenerativeModel(model_choice)
+                
+                response = model.generate_content(
+                    [base_prompt, base_img, jewelry_img],
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.4,
+                    )
+                )
                 
                 # Display result
                 st.success("✅ Generated successfully!")
                 st.subheader("🎉 Result")
                 
-                # Check if response contains an image
-                if hasattr(response, 'parts'):
-                    for part in response.parts:
-                        if hasattr(part, 'inline_data'):
-                            # Extract image data
-                            img_data = part.inline_data.data
-                            result_img = Image.open(io.BytesIO(img_data))
-                            
-                            # Display
-                            st.image(result_img, caption="Virtual Try-On Result", use_container_width=True)
-                            
-                            # Download button
-                            buf = io.BytesIO()
-                            result_img.save(buf, format='PNG')
-                            st.download_button(
-                                label="⬇️ Download Result",
-                                data=buf.getvalue(),
-                                file_name="jewelry_tryon_result.png",
-                                mime="image/png",
-                                use_container_width=True
-                            )
+                # Try to extract image from response
+                image_found = False
+                
+                if hasattr(response, 'candidates') and response.candidates:
+                    for candidate in response.candidates:
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            for part in candidate.content.parts:
+                                if hasattr(part, 'inline_data') and part.inline_data:
+                                    try:
+                                        img_data = part.inline_data.data
+                                        result_img = Image.open(io.BytesIO(img_data))
+                                        
+                                        # Display
+                                        st.image(result_img, caption="Virtual Try-On Result", use_container_width=True)
+                                        
+                                        # Download button
+                                        buf = io.BytesIO()
+                                        result_img.save(buf, format='PNG')
+                                        st.download_button(
+                                            label="⬇️ Download Result",
+                                            data=buf.getvalue(),
+                                            file_name="jewelry_tryon_result.png",
+                                            mime="image/png",
+                                            use_container_width=True
+                                        )
+                                        image_found = True
+                                        break
+                                    except Exception as img_error:
+                                        st.error(f"Error processing image: {str(img_error)}")
+                        if image_found:
                             break
-                    else:
-                        st.warning("⚠️ No image was generated. Response: " + str(response.text))
-                else:
-                    st.warning("⚠️ Unexpected response format: " + str(response))
+                
+                if not image_found:
+                    # If no image found, show the text response
+                    st.warning("⚠️ The model returned a text response instead of an image.")
+                    st.info("**Model Response:**")
+                    st.write(response.text if hasattr(response, 'text') else str(response))
+                    st.info("""
+                    **Troubleshooting Tips:**
+                    1. Make sure you're using an API key with image generation enabled
+                    2. Try using 'gemini-1.5-pro' model (select in sidebar)
+                    3. Gemini models may have varying image generation capabilities
+                    4. Consider using a dedicated image generation API like Stable Diffusion or DALL-E
+                    """)
                     
             except Exception as e:
                 st.error(f"❌ Error: {str(e)}")
-                st.info("💡 Tip: Make sure your API key is correct and has access to Gemini 2.0")
+                st.info("""
+                **Common Issues:**
+                - API key may not have access to the selected model
+                - Image generation may not be available in your region
+                - Try a different model from the sidebar
+                - Check your API quota at ai.google.dev
+                """)
 
 # Footer
 st.markdown("---")
